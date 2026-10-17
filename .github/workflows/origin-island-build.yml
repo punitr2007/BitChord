@@ -84,24 +84,50 @@ jobs:
           echo "LASTFM_SECRET=${{ secrets.LASTFM_SECRET }}" >> local.properties
 
           # Setup or generate release signing keystore
+          KEYSTORE_VALID=false
+          STORE_TYPE="PKCS12"
+
           if [ -n "${{ secrets.KEYSTORE_BASE64 }}" ]; then
-            echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > bitchord-release.jks
+            echo "Decoding provided KEYSTORE_BASE64 secret..."
+            echo "${{ secrets.KEYSTORE_BASE64 }}" | tr -d '
+ ' | base64 -d > bitchord-release.jks 2>/dev/null || true
+
+            STORE_PASS="${{ secrets.KEYSTORE_PASSWORD }}"
+            KEY_ALIAS="${{ secrets.KEY_ALIAS }}"
+
+            if keytool -list -keystore bitchord-release.jks -storepass "$STORE_PASS" -storetype PKCS12 -alias "$KEY_ALIAS" >/dev/null 2>&1; then
+              echo "Keystore successfully validated as PKCS12 format."
+              STORE_TYPE="PKCS12"
+              KEYSTORE_VALID=true
+            elif keytool -list -keystore bitchord-release.jks -storepass "$STORE_PASS" -storetype JKS -alias "$KEY_ALIAS" >/dev/null 2>&1; then
+              echo "Keystore successfully validated as JKS format."
+              STORE_TYPE="JKS"
+              KEYSTORE_VALID=true
+            else
+              echo "::warning::Provided KEYSTORE_BASE64 failed keytool verification. Falling back to generated CI keystore."
+            fi
+          fi
+
+          if [ "$KEYSTORE_VALID" = "true" ]; then
+            echo "Using verified user release keystore."
             {
               echo "storeFile=bitchord-release.jks"
               echo "storePassword=${{ secrets.KEYSTORE_PASSWORD }}"
               echo "keyAlias=${{ secrets.KEY_ALIAS }}"
               echo "keyPassword=${{ secrets.KEY_PASSWORD }}"
+              echo "storeType=$STORE_TYPE"
             } > keystore.properties
           else
-            echo "No secret keystore provided; generating a dedicated CI signing keystore..."
-            keytool -genkey -v -keystore bitchord-release.jks -alias bitchord -keyalg RSA -keysize 2048 -validity 10000 \
-              -storepass bitchord123 -keypass bitchord123 \
+            echo "Generating a dedicated CI signing keystore..."
+            keytool -genkeypair -v -keystore bitchord-release.jks -alias bitchord -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass bitchord123 -keypass bitchord123 -storetype PKCS12 \
               -dname "CN=BitChordIsland, OU=BitChord, O=BitChord, L=City, S=State, C=US"
             {
               echo "storeFile=bitchord-release.jks"
               echo "storePassword=bitchord123"
               echo "keyAlias=bitchord"
               echo "keyPassword=bitchord123"
+              echo "storeType=PKCS12"
             } > keystore.properties
           fi
 

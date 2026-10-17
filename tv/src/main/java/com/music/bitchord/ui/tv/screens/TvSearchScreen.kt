@@ -464,7 +464,7 @@ private fun List<SearchResult>.deduplicated(): List<SearchResult> {
     return filter { result ->
         when (result) {
             is SearchResult.Browse -> result.item.browseId.isBlank() || ids.add("b:" + result.item.browseId)
-            else -> {
+            is SearchResult.Track, is SearchResult.TopTrack -> {
                 val song = result.song() ?: return@filter true
                 val name = song.title.trim().lowercase() + "|" + song.artist.trim().lowercase()
                 (song.videoId.isBlank() || ids.add("t:" + song.videoId)) && names.add(name)

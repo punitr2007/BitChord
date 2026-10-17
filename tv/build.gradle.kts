@@ -171,6 +171,9 @@ android {
                 storePassword = signing.getProperty("storePassword")
                 keyAlias = signing.getProperty("keyAlias")
                 keyPassword = signing.getProperty("keyPassword")
+                signing.getProperty("storeType")?.takeIf { it.isNotBlank() }?.let {
+                    storeType = it
+                }
             }
         }
     }
