@@ -1,0 +1,172 @@
+name: Auto-Sync & Build Vivo Origin Island APK
+
+on:
+  schedule:
+    # Runs daily at 00:00 UTC to automatically check for upstream updates
+    - cron: '0 0 * * *'
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      force_build:
+        description: 'Force build even if latest release already exists'
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  check-and-build:
+    name: Build Origin Island APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Fork
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch Latest Upstream Version
+        id: upstream
+        run: |
+          LATEST_JSON=$(curl -sL "https://api.github.com/repos/kushagrasinghx/BitChord/releases/latest")
+          TAG=$(echo "$LATEST_JSON" | jq -r '.tag_name // empty')
+          if [ -z "$TAG" ] || [ "$TAG" = "null" ]; then
+            TAG="v1.8-latest"
+            BODY="Automated build for Vivo / OriginOS Origin Island support."
+          else
+            BODY=$(echo "$LATEST_JSON" | jq -r '.body // ""')
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          
+          # Check if this release already exists on this fork
+          RELEASE_CHECK=$(curl -sL -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            "https://api.github.com/repos/${{ github.repository }}/releases/tags/${TAG}-island" | jq -r '.id // empty')
+          
+          FORCE="${{ github.event.inputs.force_build }}"
+          if [ -n "$RELEASE_CHECK" ] && [ "$RELEASE_CHECK" != "null" ] && [ "$FORCE" != "true" ] && [ "${{ github.event_name }}" = "schedule" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "Release ${TAG}-island already exists. Skipping scheduled run."
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Sync with Upstream main
+        if: steps.upstream.outputs.skip != 'true'
+        run: |
+          git remote add upstream https://github.com/kushagrasinghx/BitChord.git || true
+          git fetch upstream main --tags || true
+          # Merge upstream changes while preserving our island flavor in build.gradle.kts
+          git merge upstream/main -X ours -m "chore: sync with upstream main" || true
+
+      - name: Set up JDK 17
+        if: steps.upstream.outputs.skip != 'true'
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: gradle
+
+      - name: Setup Keystore & Local Properties
+        if: steps.upstream.outputs.skip != 'true'
+        run: |
+          # Setup local.properties
+          echo "LASTFM_API_KEY=${{ secrets.LASTFM_API_KEY }}" > local.properties
+          echo "LASTFM_SECRET=${{ secrets.LASTFM_SECRET }}" >> local.properties
+
+          # Setup or generate release signing keystore
+          if [ -n "${{ secrets.KEYSTORE_BASE64 }}" ]; then
+            echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > bitchord-release.jks
+            {
+              echo "storeFile=bitchord-release.jks"
+              echo "storePassword=${{ secrets.KEYSTORE_PASSWORD }}"
+              echo "keyAlias=${{ secrets.KEY_ALIAS }}"
+              echo "keyPassword=${{ secrets.KEY_PASSWORD }}"
+            } > keystore.properties
+          else
+            echo "No secret keystore provided; generating a dedicated CI signing keystore..."
+            keytool -genkey -v -keystore bitchord-release.jks -alias bitchord -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass bitchord123 -keypass bitchord123 \
+              -dname "CN=BitChordIsland, OU=BitChord, O=BitChord, L=City, S=State, C=US"
+            {
+              echo "storeFile=bitchord-release.jks"
+              echo "storePassword=bitchord123"
+              echo "keyAlias=bitchord"
+              echo "keyPassword=bitchord123"
+            } > keystore.properties
+          fi
+
+      - name: Grant Execute Permission for gradlew
+        if: steps.upstream.outputs.skip != 'true'
+        run: chmod +x gradlew
+
+      - name: Build Signed Island Release APK
+        if: steps.upstream.outputs.skip != 'true'
+        run: ./gradlew assembleIslandRelease -Pbitchord.bundleWear=false --stacktrace
+
+      - name: Organize & Rename Release APKs
+        if: steps.upstream.outputs.skip != 'true'
+        id: collect
+        run: |
+          mkdir -p release_apks
+          TAG="${{ steps.upstream.outputs.tag }}"
+          
+          # Find all produced APKs in the island release directory
+          for f in app/build/outputs/apk/island/release/*.apk; do
+            [ -f "$f" ] || continue
+            filename=$(basename "$f")
+            if [[ "$filename" == *"universal"* ]]; then
+              dest="release_apks/BitChord-${TAG}-OriginIsland-universal.apk"
+            elif [[ "$filename" == *"arm64-v8a"* ]]; then
+              dest="release_apks/BitChord-${TAG}-OriginIsland-arm64-v8a.apk"
+            elif [[ "$filename" == *"armeabi-v7a"* ]]; then
+              dest="release_apks/BitChord-${TAG}-OriginIsland-armeabi-v7a.apk"
+            elif [[ "$filename" == *"x86_64"* ]]; then
+              dest="release_apks/BitChord-${TAG}-OriginIsland-x86_64.apk"
+            else
+              dest="release_apks/BitChord-${TAG}-OriginIsland-${filename}"
+            fi
+            cp "$f" "$dest"
+            echo "Collected: $dest"
+          done
+          ls -la release_apks/
+
+      - name: Upload Artifacts
+        if: steps.upstream.outputs.skip != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: bitchord-origin-island-apks
+          path: release_apks/*.apk
+
+      - name: Create GitHub Release on Fork
+        if: steps.upstream.outputs.skip != 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: "${{ steps.upstream.outputs.tag }}-island"
+          name: "BitChord ${{ steps.upstream.outputs.tag }} (Vivo Origin Island Support)"
+          body: |
+            ### 🏝️ BitChord with Vivo / iQOO Origin Island Support
+            
+            This is an automated build of **BitChord ${{ steps.upstream.outputs.tag }}** based on upstream [kushagrasinghx/BitChord](https://github.com/kushagrasinghx/BitChord).
+            
+            #### What is special about this build?
+            - **Application ID:** Configured as `com.amazon.mp3`.
+            - **Why:** Vivo OriginOS / Funtouch OS enforces a hardcoded whitelist in `VivoMusicWidgetMix` for the punch-hole **Origin Island (SmartIsland)** capsule animation.
+            - **Result:** You get live soundwave visualizer animations, album art, and lock screen / island playback controls automatically!
+            
+            #### Which APK should I install?
+            - For most modern phones (including iQOO Neo 7 Pro / modern Snapdragon/Dimensity): Download the **`arm64-v8a`** or **`universal`** APK.
+          draft: false
+          prerelease: false
+          files: release_apks/*.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

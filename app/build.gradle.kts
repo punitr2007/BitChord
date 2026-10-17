@@ -122,6 +122,12 @@ android {
             dimension = "env"
             // Matches defaultConfig — this is the package already shipped/installed.
         }
+        create("island") {
+            dimension = "env"
+            // Uses a package name whitelisted by Vivo / OriginOS Origin Island (SmartIsland)
+            applicationId = "com.amazon.mp3"
+            resValue("string", "app_name", "BitChord")
+        }
     }
 
     signingConfigs {

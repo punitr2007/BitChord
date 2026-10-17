@@ -60,6 +60,11 @@ android {
             dimension = "env"
             resValue("string", "app_name", "BitChord")
         }
+        create("island") {
+            dimension = "env"
+            applicationId = "com.amazon.mp3"
+            resValue("string", "app_name", "BitChord")
+        }
     }
 
     signingConfigs {
