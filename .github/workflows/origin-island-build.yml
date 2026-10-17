@@ -89,8 +89,7 @@ jobs:
 
           if [ -n "${{ secrets.KEYSTORE_BASE64 }}" ]; then
             echo "Decoding provided KEYSTORE_BASE64 secret..."
-            echo "${{ secrets.KEYSTORE_BASE64 }}" | tr -d '
- ' | base64 -d > bitchord-release.jks 2>/dev/null || true
+            echo "${{ secrets.KEYSTORE_BASE64 }}" | tr -d '[:space:]' | base64 -d > bitchord-release.jks 2>/dev/null || true
 
             STORE_PASS="${{ secrets.KEYSTORE_PASSWORD }}"
             KEY_ALIAS="${{ secrets.KEY_ALIAS }}"
